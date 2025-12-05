@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="chat-container">
+    <form id="question-form" class="input-area">
+        <span id="loading-indicator" class="loading-indicator hidden">Thinking...</span>
+        <input type="text" id="question-input" placeholder="Ask a question...">
+        <button type="submit" id="send-button">Query</button>
+    </form>
+    <div class="chat-box" id="chat-box"></div>
+</div>
+{% endblock %}
