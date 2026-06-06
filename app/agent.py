@@ -10,13 +10,10 @@ class Agent:
         # Ollama API endpoint - default local installation
         self.api_url = "http://localhost:11434/api/chat"
         # Can be configured to any Ollama model
-        #self.model = "llama3:latest"
-        #self.model = "llama3.2:3b-instruct-q2_K"
-        #self.model = "qwen3:4b"
+        self.model = "gemma4:latest"
+        #self.model = "qwen3.5:latest"
         #self.model = "gpt-oss:latest"
-        self.model = "phi4-mini:latest"
-        #self.model = "gemma3:1b"
-        #self.model = "gemma3:4b"
+        #self.model = "phi4-mini:latest"
         if self.system:
             self.messages.append({"role": "system", "content": system})
     
@@ -30,7 +27,11 @@ class Agent:
         payload = {
             "model": self.model,
             "messages": self.messages,
-            "stream": False
+            "stream": False,
+            # Ollama's options parameter to set context window size
+            "options": {
+                "num_ctx": 32768  # Adjust value (e.g., 8192, 16384, 32768)
+            }
         }
         
         try:
