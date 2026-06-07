@@ -10,10 +10,10 @@ class Agent:
         # Ollama API endpoint - default local installation
         self.api_url = "http://localhost:11434/api/chat"
         # Can be configured to any Ollama model
-        self.model = "gemma4:latest"
-        #self.model = "qwen3.5:latest"
+        #self.model = "llama3:latest"
         #self.model = "gpt-oss:latest"
         #self.model = "phi4-mini:latest"
+        self.model = "gemma4:latest"
         if self.system:
             self.messages.append({"role": "system", "content": system})
     
@@ -49,50 +49,89 @@ class Agent:
         except httpx.ConnectError:
             raise Exception("Could not connect to Ollama. Make sure the Ollama server is running (ollama serve).")
 
-# Define the name of your prompt file
+# Define name of prompt file
 prompt_filename = "system-prompt.txt"
-# Construct the path and read the file directly
+# Construct path and read file directly
 system_prompt = (Path(__file__).parent.parent / "prompts" / prompt_filename).read_text(encoding='utf-8').strip()
 
 action_re = re.compile(r'^Action: (\w+): (.*)$')
 
-def stream_query(question, max_turns=5):
+def stream_query(question, max_turns=5, max_msu_searches=3):
     i = 0
     bot = Agent(system_prompt)
-    next_prompt = question
-    
-    while i < max_turns:
+    max_wikipedia_calls = 1
+    wikipedia_calls = 0
+    msu_searches = 0
+
+    if max_turns <= 0:
+        return
+
+    try:
+        # Deterministic first step: use Wikipedia once for concepts/keywords.
         i += 1
-        try:
+        first_thought = "I need general concepts and keywords before searching MSU expertise."
+        action = "wikipedia"
+        action_input = question
+        yield 'thought', first_thought
+        yield 'action', f"{action}: {action_input}"
+
+        observation = known_actions[action](action_input)
+        wikipedia_calls += 1
+        yield 'observation', observation
+
+        # Preserve the same chat-message convention used by Agent.__call__.
+        bot.messages.append({"role": "user", "content": question})
+        bot.messages.append({"role": "assistant", "content": f"Thought: {first_thought}\nAction: {action}: {action_input}"})
+        next_prompt = f"Observation: {observation}\n\nUse search_msu_expertise next with one focused keyword query."
+
+        while i < max_turns:
+            i += 1
             result = bot(next_prompt)
             # Split the response to find thoughts and actions
             lines = result.split('\n')
+            parsed_action = None
+
             for line in lines:
                 if line.startswith('Thought:'):
                     yield 'thought', line[8:].strip()
                 elif line.startswith('Action:'):
                     yield 'action', line[7:].strip()
                     action_match = action_re.match(line)
-                    if action_match:
-                        action, action_input = action_match.groups()
-                        if action not in known_actions:
-                            raise Exception(f"Unknown action: {action}: {action_input}")
-                        observation = known_actions[action](action_input)
-                        yield 'observation', observation
+                    if action_match and parsed_action is None:
+                        parsed_action = action_match
                 else:
                     yield 'response', line.strip()
-            
-            actions = [action_re.match(a) for a in lines if action_re.match(a)]
-            if not actions:
+
+            if not parsed_action:
                 return
-                
-            action, action_input = actions[0].groups()
+
+            action, action_input = parsed_action.groups()
+            if action not in known_actions:
+                raise Exception(f"Unknown action: {action}: {action_input}")
+
+            if action == "wikipedia":
+                if wikipedia_calls >= max_wikipedia_calls:
+                    observation = {"error": "Wikipedia has already been used. Use search_msu_expertise next."}
+                    yield 'observation', observation
+                    next_prompt = f"Observation: {observation}"
+                    continue
+                wikipedia_calls += 1
+
+            if action == "search_msu_expertise":
+                if msu_searches >= max_msu_searches:
+                    observation = {"error": f"Maximum search_msu_expertise calls reached ({max_msu_searches}). Answer from existing observations."}
+                    yield 'observation', observation
+                    next_prompt = f"Observation: {observation}"
+                    continue
+                msu_searches += 1
+
             observation = known_actions[action](action_input)
+            yield 'observation', observation
             next_prompt = f"Observation: {observation}"
-            
-        except Exception as e:
-            yield 'error', str(e)
-            return
+
+    except Exception as e:
+        yield 'error', str(e)
+        return
 
 def wikipedia(query):
     """Fetches a summary from Wikipedia.
@@ -123,39 +162,6 @@ def wikipedia(query):
 
     return {"result": data["query"]["search"][0]["snippet"]}
 
-def wikidata(query):
-    """Fetches information from Wikidata.
-
-    Args:
-      query: The search query for Wikidata.
-
-    Returns:
-      A dictionary with either a 'result' key containing the information or an 'error' key.
-    """
-    response = httpx.get("https://www.wikidata.org/w/api.php", params={
-        "action": "wbsearchentities",
-        "search": query,
-        "format": "json",
-        "language": "en",
-        "uselang": "en",
-        "type": "item",
-        "limit": 1
-    })
-
-    if not response.is_success:
-        return {"error": f"Error fetching Wikidata data: {response.status_code} {response.reason_phrase}"}
-
-    try:
-        data = response.json()
-    except json.JSONDecodeError:
-        return {"error": "Invalid JSON response from Wikidata"}
-
-    if not data.get("search", []):
-        return {"error": f"No Wikidata results found for '{query}'"}
-
-    result = data["search"][0]
-    return {"result": f"{result['label']}: {result.get('description', 'No description available')}" }
-
 def search_msu_expertise(query):
     """Performs a search for MSU expertise and researcher interests.
 
@@ -163,17 +169,18 @@ def search_msu_expertise(query):
       query: The search query in the custom search engine.
 
     Returns:
-      A dictionary containing a list of dictionaries, where each inner 
-      dictionary contains 'title', 'link', and 'snippet' for each search result.
+      A dictionary containing a list of dictionaries, where each inner
+      dictionary contains 'title', 'link', 'snippets', and 'description'
+      for each search result.
     """
-    #set up your own Discovery Engine and Vertex AI Search
+    # Set up your own Discovery Engine and Vertex AI Search
     #https://docs.cloud.google.com/generative-ai-app-builder/docs/migrate-from-cse
-    projectID = 'ADD-YOUR-PROJECT-DATASTORE-ID'
-    agentID = 'ADD-YOUR-AGENT-ID'
-    apiKey = 'ADD-YOUR-API-KEY'
-    
+    projectID = 'expertise-finder-351604'
+    agentID = 'msu-expertise-finder-ai_1731776759855'
+    apiKey = 'AIzaSyDmI5BzQEaaylecXJiaSg86G4yiO_WBZcQ'
+
     url = f"https://discoveryengine.googleapis.com/v1/projects/{projectID}/locations/global/collections/default_collection/engines/{agentID}/servingConfigs/default_search:searchLite?key={apiKey}"
-    
+
     data = {
         "servingConfig": f"projects/{projectID}/locations/global/collections/default_collection/engines/{agentID}/servingConfigs/default_search",
         "query": query,
@@ -201,18 +208,27 @@ def search_msu_expertise(query):
     # Extract and format search results
     results = []
     for result in decoded_response.get('results', []):
+        document = result.get('document', {})
+        derived_data = document.get('derivedStructData', {})
+        struct_data = document.get('structData', {})
+        snippets = []
+
+        for snippet in derived_data.get('snippets', []):
+            snippet_text = snippet.get('snippet') or snippet.get('htmlSnippet')
+            if snippet_text:
+                snippets.append(snippet_text)
+
         extracted_result = {
-            'title': result['document']['derivedStructData']['title'],
-            'link': result['document']['derivedStructData']['link'],
-            'snippet': result['document']['derivedStructData']['snippets'][0]['snippet']
+            'title': derived_data.get('title') or struct_data.get('title', ''),
+            'link': derived_data.get('link') or struct_data.get('link', ''),
+            'snippets': snippets,
+            'description': derived_data.get('description') or struct_data.get('description', '')
         }
         results.append(extracted_result)
 
-    decoded_response['results'] = results
-    return decoded_response
+    return {'results': results}
 
 known_actions = {
     "wikipedia": wikipedia,
-    "search_msu_expertise": search_msu_expertise,
-    "wikidata": wikidata
+    "search_msu_expertise": search_msu_expertise
 }
