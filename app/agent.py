@@ -134,20 +134,46 @@ def stream_query(question, max_turns=5, max_msu_searches=3):
         return
 
 def wikipedia(query):
-    """Fetches a summary from Wikipedia.
+    """Fetches one Wikipedia page summary for keyword and term extraction.
 
     Args:
       query: The search query for Wikipedia.
 
     Returns:
-      A dictionary with either a 'result' key containing the summary or an 'error' key.
+      A dictionary with title, description, extract, and keywords_hint, or an error.
     """
-    response = httpx.get("https://en.wikipedia.org/w/api.php", params={
+    query = query.strip()
+    if not query:
+        return {"error": "Wikipedia query is empty"}
+
+    headers = {
+        "User-Agent": "MSUResearchAgent/0.1 (https://www.montana.edu/)",
+        "Accept": "application/json"
+    }
+
+    params = {
         "action": "query",
-        "list": "search",
-        "srsearch": query,
-        "format": "json"
-    })
+        "generator": "search",
+        "gsrsearch": query,
+        "gsrlimit": 1,
+        "prop": "extracts|pageterms",
+        "exintro": 1,
+        "explaintext": 1,
+        "exsentences": 3,
+        "wbptterms": "description",
+        "format": "json",
+        "formatversion": 2
+    }
+
+    try:
+        response = httpx.get(
+            "https://en.wikipedia.org/w/api.php",
+            params=params,
+            headers=headers,
+            timeout=10.0
+        )
+    except httpx.RequestError as e:
+        return {"error": f"Error connecting to Wikipedia: {e}"}
 
     if not response.is_success:
         return {"error": f"Error fetching Wikipedia data: {response.status_code} {response.reason_phrase}"}
@@ -157,10 +183,22 @@ def wikipedia(query):
     except json.JSONDecodeError:
         return {"error": "Invalid JSON response from Wikipedia"}
 
-    if not data.get("query", {}).get("search", []):
+    pages = data.get("query", {}).get("pages", [])
+    if not pages:
         return {"error": f"No Wikipedia results found for '{query}'"}
 
-    return {"result": data["query"]["search"][0]["snippet"]}
+    page = pages[0]
+    description = ""
+    descriptions = page.get("terms", {}).get("description", [])
+    if descriptions:
+        description = descriptions[0]
+
+    return {
+        "title": page.get("title", ""),
+        "description": description,
+        "extract": page.get("extract", ""),
+        "keywords_hint": "Use the title, description, and extract to choose 2-4 focused search_msu_expertise keyword queries."
+    }
 
 def search_msu_expertise(query):
     """Performs a search for MSU expertise and researcher interests.
