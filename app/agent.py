@@ -215,7 +215,7 @@ def search_msu_expertise(query):
     #https://docs.cloud.google.com/generative-ai-app-builder/docs/migrate-from-cse
     projectID = 'expertise-finder-351604'
     agentID = 'msu-expertise-finder-ai_1731776759855'
-    apiKey = 'AIzaSyDmI5BzQEaaylecXJiaSg86G4yiO_WBZcQ'
+    apiKey = 'ADD-YOUR-API-KEY-HERE'
 
     url = f"https://discoveryengine.googleapis.com/v1/projects/{projectID}/locations/global/collections/default_collection/engines/{agentID}/servingConfigs/default_search:searchLite?key={apiKey}"
 
